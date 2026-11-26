@@ -6,10 +6,11 @@
 
 **Merapi Ring Run** — a complete, original chase-view flight game that plays offline in a desktop browser from static files, with no network requests. Fly a little red-and-yellow prop plane down the Merapi valley at dawn, thread all 12 glowing rings, mind the mountains, and land on the far runway before the 150-second clock runs out.
 
-- Chase view over recognisable terrain: a winding river, patchwork fields, snow-capped ridges and two runways, all drawn by the game's own canvas code — no images, no downloaded assets.
+- Chase view over recognisable terrain: a winding river, patchwork fields, snow-capped ridges, Merapi's cone with a smoke plume, trees rushing past and two runways, all drawn by the game's own canvas code — no images, no downloaded assets.
 - The aircraft stays in frame with lit instruments: a glowing HUD (altitude, speed, heading, compass tape, score, timer) plus an instrument panel with an artificial horizon, airspeed and altitude dials, a heading dial and a throttle gauge.
-- Keyboard and mouse: arrows or WASD to pitch and bank, mouse to steer, Shift to throttle up, Ctrl to throttle down, Space to boost, P to pause, R to restart. Enter or click to fly.
-- Score, combos, ring-pass and landing bonuses, terrain-crash and overshoot logic, and start / pause / crash / landing / time-up flows.
+- Keyboard and mouse: arrows or WASD to pitch and bank, mouse to steer, Shift to throttle up, Ctrl to throttle down, Space to boost, P to pause, R to restart. Enter or click to fly. Banking right really turns right: a coordinated turn model with a nose that settles back onto the valley track when the wings level.
+- Rings with personality: later rings bob and drift, shrink as the run goes on, and two gold rings are worth 250. Centre a ring for PERFECT +50, chain rings within 8 seconds to build the combo, and the last two rings form the glide path into the runway. A guide marker with a dashed line and the distance always points at the next ring, and a final-approach helper (line-up bar plus TOO HIGH / TOO FAST / ON GLIDE PATH) talks the player down to the runway.
+- Score, combos, ring-pass and landing bonuses, terrain-crash and overshoot logic, a touchdown rollout before the result screen, and start / pause / crash / landing / time-up flows.
 
 ## Run it
 

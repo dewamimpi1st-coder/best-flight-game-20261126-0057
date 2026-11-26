@@ -1,7 +1,10 @@
 /* Merapi Ring Run — an original chase-view flight game.
    Fly a little prop plane down the Merapi valley, through 12 glowing rings,
    and land on the far runway before the clock runs out. All art is drawn
-   here on canvas; no images, no network, no downloaded assets. */
+   here on canvas; no images, no network, no downloaded assets.
+   v2: controls fixed (bank right now really turns right), moving / bonus /
+   shrinking rings, combo timer, speed streaks, trees, next-ring guide,
+   final-approach helper, Merapi cone, landing rollout. */
 
 (() => {
   'use strict';
@@ -15,6 +18,7 @@
   const RING_COUNT = 12;
   const TRACK_END = 12400;           // far runway starts near here
   const SHOT_T = 3.25;               // frozen clock for deterministic shots
+  const COMBO_WINDOW = 8;            // seconds between rings before the combo dies
 
   // ---- seeded randomness: the same valley, rings and weather every run ----
   function mulberry32(seed) {
@@ -30,16 +34,54 @@
   const ridgePhase = [rng() * 6.28, rng() * 6.28, rng() * 6.28, rng() * 6.28];
   const cloudSeed = [];
   for (let i = 0; i < 14; i++) cloudSeed.push({ x: rng(), y: 0.06 + rng() * 0.2, s: 0.5 + rng() * 1.1, v: 4 + rng() * 9 });
+  // Trees lining the valley floor: ground detail that rushes past at speed.
+  const treeSeed = [];
+  for (let i = 0; i < 260; i++) {
+    const side = rng() < 0.5 ? -1 : 1;
+    treeSeed.push({ x: side * (130 + rng() * 720), z: rng() * 12400, s: 0.7 + rng() * 0.9 });
+  }
 
-  // Rings down the valley: fixed, seeded positions.
+  // Rings down the valley: fixed, seeded positions, but each ring has a
+  // personality — later rings bob, drift sideways, shrink, and two gold
+  // bonus rings are worth more. The run ramps up as it goes on.
+  // The course is a random walk, not independent jumps: consecutive rings
+  // are never farther apart than the plane can actually fly between them.
   const rings = [];
+  let walkX = 0, walkY = 220 + Math.round(rng() * 120);
   for (let i = 0; i < RING_COUNT; i++) {
+    walkX = Math.max(-320, Math.min(320, walkX + Math.round((rng() * 2 - 1) * 200)));
+    if (i > 0) walkY = Math.max(160, Math.min(800, walkY + Math.round((rng() * 2 - 1) * 120)));
+    // The last two rings are the glide path into the runway: low, near the
+    // centreline, so the run ends in a landing instead of a trap.
+    if (i === 10) { walkX = Math.round(walkX * 0.5); walkY = Math.min(walkY, 200); }
+    if (i === 11) { walkX = 0; walkY = 120; }
+    const late = i / (RING_COUNT - 1);          // 0 at ring 1, 1 at ring 12
+    const bonus = i === 5 || i === 9;           // gold bonus rings
+    const mover = i >= 3;                       // rings 4+ move
     rings.push({
       z: 1600 + i * 920,
-      x: Math.round((rng() * 2 - 1) * 300),
-      y: 380 + Math.round(rng() * 420),
-      r: 95, passed: false, missed: false,
+      x: walkX,
+      y: walkY,
+      r: bonus ? 70 : Math.round(95 - late * 17),   // 95 down to 78
+      bob: mover ? 30 + late * 45 : 0,               // vertical bob amplitude
+      bobFreq: 0.5 + rng() * 0.5 + late * 0.4,
+      drift: i >= 6 ? 45 + late * 55 : 0,            // sideways drift amplitude
+      driftFreq: 0.35 + rng() * 0.3,
+      phase: rng() * 6.28,
+      bonus,
+      passed: false, missed: false,
     });
+  }
+  // Where a ring actually is right now (its bob/drift at flight time t).
+  function ringPos(r, t) {
+    return {
+      x: r.x + r.drift * Math.sin(t * r.driftFreq + r.phase),
+      y: r.y + r.bob * Math.sin(t * r.bobFreq + r.phase),
+      r: r.r,
+    };
+  }
+  function nextRing() {
+    return rings.find((r) => !r.passed && !r.missed && r.z - S.dist > 4);
   }
 
   // ---- terrain: valley floor near the track, ridges rising to both sides ----
@@ -65,16 +107,16 @@
 
   // ---- state ----
   const S = {
-    mode: 'title',        // title | fly | pause | crash | land | done
+    mode: 'title',        // title | fly | pause | crash | rollout | land | done
     t: 0,                 // flight clock (s)
     timeLeft: RUN_TIME,
     dist: 0, px: 0, alt: 60,
     speed: 0, throttle: 0,
     bank: 0, pitch: 0, heading: 90,   // heading: 90 = east, down the valley
-    score: 0, combo: 0, bestCombo: 0,
-    ringsHit: 0, boost: false,
+    score: 0, combo: 0, bestCombo: 0, lastRingT: -99,
+    ringsHit: 0, bonusHit: 0, perfectHit: 0, boost: false,
     msg: '', msgT: 0, flash: 0,
-    shake: 0, prop: 0,
+    shake: 0, prop: 0, rolloutT: 0,
     keys: {}, mouseX: 0.5, mouseY: 0.5, mouseSeen: false,
     crashWhy: '', landBonus: 0,
   };
@@ -84,9 +126,10 @@
     S.dist = 0; S.px = 0; S.alt = 46;
     S.speed = 0; S.throttle = 55;
     S.bank = 0; S.pitch = 0; S.heading = 90;
-    S.score = 0; S.combo = 0; S.bestCombo = 0;
-    S.ringsHit = 0; S.boost = false;
+    S.score = 0; S.combo = 0; S.bestCombo = 0; S.lastRingT = -99;
+    S.ringsHit = 0; S.bonusHit = 0; S.perfectHit = 0; S.boost = false;
     S.msg = 'TAKE OFF — FOLLOW THE RINGS'; S.msgT = 4; S.flash = 0; S.shake = 0;
+    S.rolloutT = 0;
     for (const r of rings) { r.passed = false; r.missed = false; }
   }
 
@@ -138,6 +181,25 @@
 
   // ---- flight model ----
   function update(dt) {
+    if (S.mode === 'rollout') {
+      // Touchdown rollout: the plane decelerates along the runway, then the
+      // result screen appears. This is the landing sequence, not a freeze.
+      S.rolloutT += dt;
+      S.speed = Math.max(0, S.speed - 70 * dt);
+      S.throttle = 0;
+      S.dist += S.speed * 2.2 * dt;
+      S.alt = groundH(0, S.dist) + 6;
+      S.prop += dt * (6 + S.throttle * 0.35);
+      S.bank *= Math.max(0, 1 - 4 * dt);
+      if (S.rolloutT > 2.4) {
+        S.mode = 'land';
+        S.landBonus = 500 + Math.round(S.timeLeft) * 5;
+        S.score += S.landBonus;
+        beep(660, 0.2, 0.12); beep(990, 0.3, 0.1);
+      }
+      if (S.msgT > 0) S.msgT -= dt;
+      return;
+    }
     if (S.mode !== 'fly') return;
     S.t += dt;
     S.timeLeft -= dt;
@@ -149,7 +211,11 @@
     const targetSpeed = 55 + S.throttle * 1.5 + (S.boost || S.keys.boost ? 55 : 0);
     S.speed += (targetSpeed - S.speed) * Math.min(1, 1.4 * dt);
 
-    // bank -> heading and lateral drift; pitch -> climb / sink
+    // bank -> heading and lateral drift; pitch -> climb / sink.
+    // Banking right turns the nose right (heading rises from 90) and the
+    // plane drifts right through the valley — a coordinated turn. Wings
+    // level, the nose gently settles back onto the valley track, so the
+    // plane never wanders off on its own.
     let bankTarget = 0, pitchTarget = 0;
     if (S.keys.left) bankTarget = -1;
     if (S.keys.right) bankTarget = 1;
@@ -160,37 +226,55 @@
       pitchTarget = Math.max(-1, Math.min(1, (0.5 - S.mouseY) * 2.0));
     }
     S.bank += (bankTarget * 0.62 - S.bank) * Math.min(1, 5 * dt);
-    S.pitch += (pitchTarget * 0.5 - S.pitch) * Math.min(1, 4 * dt);
-    S.heading += -S.bank * 26 * dt;
-    if (S.heading < 0) S.heading += 360;
-    if (S.heading >= 360) S.heading -= 360;
+    S.pitch += (pitchTarget * 0.6 - S.pitch) * Math.min(1, 4 * dt);
+    S.heading += S.bank * 34 * dt;
+    // Wings level, the nose settles back onto the valley track quickly, so
+    // the plane stops drifting sideways instead of wandering off course.
+    if (Math.abs(bankTarget) < 0.05) S.heading += (90 - S.heading) * 0.55 * dt;
+    S.heading = Math.max(20, Math.min(160, S.heading));
 
     // stall: slow flight sinks, but never while rolling on a runway strip
     const groundNow = groundH(S.px, S.dist);
     const onStrip = (S.dist < 950 || (S.dist > 11450 && S.dist < 12450)) && Math.abs(S.px) < 48;
-    let vs = S.pitch * S.speed * 0.55;
+    let vs = S.pitch * S.speed * 0.7;
     if (S.speed < 95 && S.alt > groundNow + 40) vs -= (95 - S.speed) * 1.6;
     S.alt += vs * dt;
     if (S.alt > 2000) { S.alt = 2000; if (S.msgT <= 0) { S.msg = 'CEILING 2000 FT'; S.msgT = 2; } }
     if (onStrip && S.alt <= groundNow + 8 && vs <= 0) S.alt = groundNow + 6;   // rolling on the strip
     if (S.alt < 5) S.alt = 5;
 
-    S.px += -S.bank * S.speed * 0.62 * dt;
+    // Coordinated turn: lateral speed follows the nose, plus a small direct
+    // bank response so the plane answers the stick immediately.
+    const dev = (S.heading - 90) * Math.PI / 180;
+    S.px += S.speed * 2.2 * Math.sin(dev) * dt + S.bank * S.speed * 0.8 * dt;
     S.px = Math.max(-900, Math.min(900, S.px));
     S.dist += S.speed * 2.2 * dt;
     S.prop += dt * (6 + S.throttle * 0.35);
 
-    // rings
+    // combo timer: dawdle more than COMBO_WINDOW seconds between rings and
+    // the combo is gone.
+    if (S.combo > 0 && S.t - S.lastRingT > COMBO_WINDOW) {
+      S.combo = 0;
+      S.msg = 'COMBO LOST — TOO SLOW'; S.msgT = 1.6;
+    }
+
+    // rings (moving: judged against where the ring is right now)
     for (const r of rings) {
       if (r.passed || r.missed) continue;
       if (S.dist >= r.z) {
-        const dx = Math.abs(S.px - r.x), dy = Math.abs(S.alt - r.y);
-        if (dx < 120 && dy < 120) {
+        const pos = ringPos(r, S.t);
+        const dx = Math.abs(S.px - pos.x), dy = Math.abs(S.alt - pos.y);
+        if (dx < pos.r + 25 && dy < pos.r + 25) {
           r.passed = true; S.ringsHit++;
           S.combo++; S.bestCombo = Math.max(S.bestCombo, S.combo);
-          const pts = 100 + (S.combo - 1) * 25;
+          S.lastRingT = S.t;
+          const base = r.bonus ? 250 : 100;
+          const pts = base + (S.combo - 1) * 25;
+          let extra = '';
+          if (dx < 45 && dy < 45) { S.score += 50; S.perfectHit++; extra = '  PERFECT +50'; beep(1568, 0.2, 0.09); }
+          if (r.bonus) S.bonusHit++;
           S.score += pts;
-          S.msg = 'RING +' + pts + (S.combo > 1 ? '  COMBO x' + S.combo : '');
+          S.msg = (r.bonus ? 'GOLD RING +' : 'RING +') + pts + (S.combo > 1 ? '  COMBO x' + S.combo : '') + extra;
           S.msgT = 2.2; S.flash = 0.5; beep(880, 0.18, 0.12); beep(1320, 0.22, 0.08);
         } else {
           r.missed = true; S.combo = 0;
@@ -207,13 +291,12 @@
     }
     if (S.alt < ground + 90 && S.dist > 900 && S.msgT <= 0) { S.msg = 'PULL UP — TERRAIN'; S.msgT = 1.2; }
 
-    // landing on the far runway
+    // landing on the far runway: touchdown starts a rollout, not a freeze
     if (S.dist > 11500 && S.dist < 12400) {
-      if (Math.abs(S.px) < 48 && S.alt < 70 && S.speed < 165) {
-        S.mode = 'land';
-        S.landBonus = 500 + Math.round(S.timeLeft) * 5;
-        S.score += S.landBonus;
-        beep(660, 0.2, 0.12); beep(990, 0.3, 0.1);
+      if (Math.abs(S.px) < 48 && S.alt < 85 && S.speed < 175) {
+        S.mode = 'rollout'; S.rolloutT = 0;
+        S.msg = 'TOUCHDOWN — ROLLING OUT'; S.msgT = 2.4;
+        beep(660, 0.2, 0.12);
         return;
       }
       if (S.dist > 12300 && S.alt < 70 && Math.abs(S.px) >= 48) {
@@ -253,6 +336,22 @@
     sg.addColorStop(1, 'rgba(255,170,90,0)');
     ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sx, sy, 130, 0, 6.2832); ctx.fill();
     ctx.fillStyle = '#ffedbe'; ctx.beginPath(); ctx.arc(sx, sy, 34, 0, 6.2832); ctx.fill();
+    // Merapi itself, far down the valley: a dark cone with a snow cap and a
+    // slow smoke plume. It drifts a little with the heading, like the world.
+    const horizonY = 330 + S.pitch * 60;
+    const coneX = CX + (90 - S.heading) * 3.2;
+    const apexY = horizonY - 252, baseY = horizonY + 30, halfW = 250;
+    ctx.fillStyle = '#33465e';
+    ctx.beginPath(); ctx.moveTo(coneX - halfW, baseY); ctx.lineTo(coneX, apexY); ctx.lineTo(coneX + halfW, baseY); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(240,244,250,0.9)';
+    ctx.beginPath(); ctx.moveTo(coneX - 52, apexY + 52); ctx.lineTo(coneX, apexY); ctx.lineTo(coneX + 52, apexY + 52); ctx.lineTo(coneX + 26, apexY + 66); ctx.lineTo(coneX, apexY + 54); ctx.lineTo(coneX - 26, apexY + 66); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(235,238,244,0.5)';
+    for (let i = 0; i < 3; i++) {
+      const ph = (t * 0.12 + i / 3) % 1;
+      ctx.beginPath();
+      ctx.ellipse(coneX + 14 + ph * 46, apexY - 8 - ph * 52, 16 + ph * 22, 7 + ph * 9, 0, 0, 6.2832);
+      ctx.fill();
+    }
     // clouds drift slowly
     ctx.fillStyle = 'rgba(255,244,226,0.85)';
     for (const c of cloudSeed) {
@@ -313,6 +412,16 @@
     ctx.closePath();
     ctx.fillStyle = '#3f8fbf'; ctx.fill();
     ctx.strokeStyle = 'rgba(210,240,255,0.7)'; ctx.lineWidth = 1.5; ctx.stroke();
+    // trees: small dark triangles that rush past and sell the speed
+    for (const tr of treeSeed) {
+      const dz = tr.z - S.dist;
+      if (dz < 40 || dz > 3000) continue;
+      const p = project(tr.x, groundH(tr.x, tr.z) + 4, tr.z);
+      if (!p || p.x < -20 || p.x > W + 20 || p.y < horizonY) continue;
+      const h = Math.max(2, 26 * p.s * tr.s), w = h * 0.55;
+      ctx.fillStyle = '#1d3d1e';
+      ctx.beginPath(); ctx.moveTo(p.x, p.y - h); ctx.lineTo(p.x - w, p.y); ctx.lineTo(p.x + w, p.y); ctx.closePath(); ctx.fill();
+    }
     // perspective field grid
     ctx.strokeStyle = 'rgba(20,40,20,0.35)'; ctx.lineWidth = 1;
     for (let gx = -800; gx <= 800; gx += 160) {
@@ -364,13 +473,13 @@
   function drawRings() {
     const list = rings.filter((r) => r.z - S.dist > 4 && r.z - S.dist < 5200)
       .sort((a, b) => b.z - a.z);
-    const next = rings.find((r) => !r.passed && !r.missed && r.z - S.dist > 4);
     for (const r of list) {
-      const p = project(r.x, r.y, r.z);
+      const pos = ringPos(r, S.t);
+      const p = project(pos.x, pos.y, r.z);
       if (!p) continue;
-      const rx = r.r * p.s * 0.9, ry = r.r * p.s;
+      const rx = pos.r * p.s * 0.9, ry = pos.r * p.s;
       if (rx < 2) continue;
-      const col = r.passed ? '#57e389' : r.missed ? '#8a94a6' : '#ffb02e';
+      const col = r.passed ? '#57e389' : r.missed ? '#8a94a6' : r.bonus ? '#ffd94a' : '#ffb02e';
       ctx.save();
       ctx.shadowColor = col; ctx.shadowBlur = 22;
       ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, 7 * p.s);
@@ -379,15 +488,28 @@
       ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = Math.max(1, 2 * p.s);
       ctx.beginPath(); ctx.ellipse(p.x, p.y, rx, ry, 0, 0, 6.2832); ctx.stroke();
       ctx.restore();
-      // Label only the next ring to fly through, small, so labels never pile up.
-      if (r === next && p.s > 0.1) {
-        const pn = project(next.x, next.y, next.z);
-        ctx.fillStyle = '#fff2cf';
-        ctx.font = 'bold ' + Math.max(11, Math.min(20, Math.round(18 * pn.s))) + 'px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('RING ' + (rings.indexOf(next) + 1), pn.x, pn.y - next.r * pn.s - 12);
-      }
+      // (The next-ring label lives in drawRingGuide, with the distance.)
     }
+  }
+
+  // Wind streaks: radial lines that rush outward as speed rises, so fast
+  // flight feels fast even when the valley below is far away.
+  function drawSpeedStreaks() {
+    if (S.speed < 130 || (S.mode !== 'fly' && S.mode !== 'rollout')) return;
+    const k = Math.min(1, (S.speed - 130) / 120);
+    const n = Math.round(10 + 22 * k);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.28 * k).toFixed(2) + ')';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < n; i++) {
+      const ang = (i * 2.39996 + 0.7) % 6.2832;   // golden-angle spread
+      const rr = ((S.dist * 2.6 + i * 173) % 620) / 620;
+      const r0 = 180 + rr * 420, r1 = r0 + 26 + 44 * k;
+      const cxp = CX + Math.cos(ang) * r0, cyp = 420 + Math.sin(ang) * r0 * 0.75;
+      const ex = CX + Math.cos(ang) * r1, ey = 420 + Math.sin(ang) * r1 * 0.75;
+      ctx.beginPath(); ctx.moveTo(cxp, cyp); ctx.lineTo(ex, ey); ctx.stroke();
+    }
+    ctx.restore();
   }
 
   function drawPlane(t) {
@@ -538,6 +660,78 @@
     ctx.restore();
   }
 
+  // Next-ring guide: a marker (or an edge arrow when the ring is off-screen)
+  // plus a dashed line from the nose and the distance, so the player always
+  // knows where to fly next instead of hunting for the next glow.
+  function drawRingGuide(t) {
+    if (S.mode !== 'fly') return;
+    const next = nextRing();
+    if (!next) return;
+    const pos = ringPos(next, S.t);
+    const dz = Math.max(0, Math.round(next.z - S.dist));
+    const p = project(pos.x, pos.y, next.z);
+    const label = (next.bonus ? 'GOLD ' : '') + 'RING ' + (rings.indexOf(next) + 1) + ' · ' + dz + 'm';
+    const col = next.bonus ? '#ffd94a' : '#ffb02e';
+    const onScreen = p && p.x > 30 && p.x < W - 30 && p.y > 60 && p.y < H - 140;
+    ctx.save();
+    if (onScreen) {
+      // dashed guide line from the nose to the ring
+      ctx.strokeStyle = 'rgba(255,176,46,0.55)'; ctx.lineWidth = 2;
+      ctx.setLineDash([10, 10]);
+      ctx.beginPath(); ctx.moveTo(CX, 520); ctx.lineTo(p.x, p.y); ctx.stroke();
+      ctx.setLineDash([]);
+      // pulsing diamond marker on the ring
+      const pulse = 10 + 3 * Math.sin(t * 6);
+      ctx.strokeStyle = col; ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y - pulse); ctx.lineTo(p.x + pulse, p.y);
+      ctx.lineTo(p.x, p.y + pulse); ctx.lineTo(p.x - pulse, p.y);
+      ctx.closePath(); ctx.stroke();
+      ctx.fillStyle = col; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(label, p.x, p.y - pos.r * p.s - 34);
+    } else {
+      // edge arrow: point from screen centre toward the ring's direction
+      const tx = p ? p.x : CX + (pos.x - S.px) * 0.2;
+      const ty = p ? p.y : 300;
+      const ang = Math.atan2(ty - 400, tx - CX);
+      const ax = CX + Math.cos(ang) * 330, ay = 400 + Math.sin(ang) * 250;
+      ctx.translate(ax, ay); ctx.rotate(ang);
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-12, -13); ctx.lineTo(-12, 13); ctx.closePath(); ctx.fill();
+      ctx.rotate(-ang); ctx.translate(-ax, -ay);
+      ctx.fillStyle = col; ctx.font = 'bold 15px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(label, ax, ay + 34);
+    }
+    ctx.restore();
+  }
+
+  // Final-approach helper: line-up bar plus plain-language guidance, so the
+  // landing reads as a landing instead of a guess.
+  function drawApproach() {
+    if (S.mode !== 'fly' || S.dist < 10200) return;
+    const y = 64;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,14,10,0.6)'; ctx.fillRect(CX - 170, y, 340, 58);
+    ctx.strokeStyle = '#57e389'; ctx.lineWidth = 1; ctx.strokeRect(CX - 170, y, 340, 58);
+    // green centre zone = the runway, 96 wide in world units
+    ctx.fillStyle = 'rgba(87,227,137,0.35)';
+    ctx.fillRect(CX - 24, y + 8, 48, 22);
+    ctx.fillStyle = '#bfe9cd'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('FINAL APPROACH — LINE UP', CX, y + 46);
+    // marker: where the plane is relative to the runway centreline
+    const mx = CX + Math.max(-160, Math.min(160, S.px * 1.6));
+    ctx.fillStyle = S.px > -48 && S.px < 48 ? '#57e389' : '#ffb02e';
+    ctx.beginPath(); ctx.moveTo(mx, y + 10); ctx.lineTo(mx + 7, y + 20); ctx.lineTo(mx - 7, y + 20); ctx.closePath(); ctx.fill();
+    let guide = 'ON GLIDE PATH — FLARE AND LAND';
+    let col = '#7dffb0';
+    if (S.alt > 160) { guide = 'TOO HIGH — DESCEND'; col = '#ffb02e'; }
+    else if (S.speed > 175) { guide = 'TOO FAST — THROTTLE DOWN'; col = '#ffb02e'; }
+    else if (Math.abs(S.px) >= 48) { guide = 'LINE UP — CENTRE THE RUNWAY'; col = '#ffb02e'; }
+    else if (S.alt > 85) { guide = 'ON GLIDE PATH — EASE DOWN'; col = '#7dffb0'; }
+    litText(guide, CX, y + 78, 17, col, 'center');
+    ctx.restore();
+  }
+
   function drawHUD(t) {
     drawCompass();
     litText('ALT ' + Math.round(S.alt) + ' FT', 24, 52, 22, '#7dffb0', 'left');
@@ -545,7 +739,8 @@
     litText('HDG ' + String(Math.round(S.heading)).padStart(3, '0') + '°', 24, 112, 22, '#7cc7ff', 'left');
     litText('TIME ' + Math.max(0, Math.ceil(S.timeLeft)) + 's', W - 24, 52, 22, '#ffe9a8', 'right');
     litText('SCORE ' + S.score, W - 24, 82, 22, '#ffe9a8', 'right');
-    if (S.msgT > 0) {
+    if (S.combo > 1) litText('COMBO x' + S.combo, W - 24, 112, 18, '#ffd94a', 'right');
+    if (S.msgT > 0 && S.mode !== 'title') {
       ctx.save();
       ctx.globalAlpha = Math.min(1, S.msgT);
       // Low, over the ground: the sky band holds the rings and their labels.
@@ -582,19 +777,25 @@
     if (S.dist < 1400) drawRunway(0, 900, 'MERAPI FIELD');
     if (S.dist > 10200) drawRunway(11500, 12400, 'LAND HERE');
     drawRings();
+    drawSpeedStreaks();
     ctx.restore();
     if (S.mode !== 'title') drawPlane(t);
+    drawRingGuide(t);
     drawHUD(t);
+    drawApproach();
     if (S.mode !== 'title') drawInstruments();
     ctx.restore();
 
     if (S.mode === 'title') {
       overlay('MERAPI RING RUN', [
-        'Fly the valley. Thread all 12 rings. Land on the far runway.',
+        'Fly the valley. Thread all 12 glowing rings. Land before the clock runs out.',
         '',
         'ARROWS / WASD — pitch and bank      MOUSE — steer',
         'SHIFT — throttle up    CTRL — throttle down    SPACE — boost',
         'P — pause      R — restart',
+        '',
+        'Later rings bob and drift. GOLD rings are worth 250. Centre a ring for PERFECT +50.',
+        'Chain rings within 8 seconds to build your combo.',
         '',
         'PRESS ENTER OR CLICK TO FLY',
       ], '#7dffb0');
@@ -602,8 +803,10 @@
       overlay('PAUSED', ['Press P to keep flying', 'Score ' + S.score + '   Rings ' + S.ringsHit + '/' + RING_COUNT], '#ffe9a8');
     } else if (S.mode === 'crash') {
       overlay('CRASHED', [S.crashWhy, 'Score ' + S.score + '   Rings ' + S.ringsHit + '/' + RING_COUNT, '', 'PRESS R OR CLICK TO FLY AGAIN'], '#ff5a4e');
+    } else if (S.mode === 'rollout') {
+      // no overlay: the player watches the plane roll out on the runway
     } else if (S.mode === 'land') {
-      overlay('TOUCHDOWN!', ['You landed on the far runway.', 'Landing bonus +' + S.landBonus, 'FINAL SCORE ' + S.score, '', 'PRESS R OR CLICK TO FLY AGAIN'], '#7dffb0');
+      overlay('TOUCHDOWN!', ['You landed on the far runway.', 'Landing bonus +' + S.landBonus, 'FINAL SCORE ' + S.score, 'Rings ' + S.ringsHit + '/' + RING_COUNT + '   Gold ' + S.bonusHit + '   Perfect ' + S.perfectHit + '   Best combo x' + S.bestCombo, '', 'PRESS R OR CLICK TO FLY AGAIN'], '#7dffb0');
     } else if (S.mode === 'done') {
       overlay('RUN OVER', [S.msg, 'Score ' + S.score + '   Rings ' + S.ringsHit + '/' + RING_COUNT + '   Best combo x' + S.bestCombo, '', 'PRESS R OR CLICK TO FLY AGAIN'], '#ffe9a8');
     }
@@ -617,7 +820,8 @@
       S.timeLeft = 150;
       S.msg = 'TAKE OFF — FOLLOW THE RINGS'; S.msgT = 4;
     } else if (name === 'ring') {
-      S.dist = 1600 + 3 * 920 - 420; S.px = rings[3].x - 40; S.alt = rings[3].y + 30;
+      const pos = ringPos(rings[3], SHOT_T);
+      S.dist = 1600 + 3 * 920 - 420; S.px = pos.x - 40; S.alt = pos.y + 30;
       S.speed = 210; S.throttle = 82; S.bank = -0.18; S.pitch = 0.05;
       S.timeLeft = 132;
       S.score = 300; S.ringsHit = 3; S.combo = 3; S.bestCombo = 3;
@@ -644,7 +848,7 @@
   // ---- boot ----
   const params = new URLSearchParams(window.location.search);
   const shot = params.get('shot');
-  window.__mrr = { state: S, rings, reset, groundH };
+  window.__mrr = { state: S, rings, reset, groundH, ringPos };
   if (shot) {
     applyShot(shot);
   } else {
