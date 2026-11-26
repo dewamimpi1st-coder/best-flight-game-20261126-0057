@@ -1,0 +1,28 @@
+/* Merapi Ring Run — presentation only. All art is drawn by game.js on canvas. */
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: #0a0f1e;
+  color: #cfe8d8;
+  font-family: "Segoe UI", Verdana, sans-serif;
+}
+#wrap {
+  min-height: 100%;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 10px; padding: 12px;
+}
+#game {
+  width: min(1280px, 96vw, 140vh);
+  height: auto; aspect-ratio: 8 / 5;
+  display: block;
+  border: 2px solid #2b4a3a;
+  border-radius: 10px;
+  background: #0a0f1e;
+  box-shadow: 0 0 42px rgba(64, 190, 130, 0.22);
+  cursor: crosshair;
+}
+#hint {
+  font-size: 13px; letter-spacing: 0.04em;
+  color: #8fb8a2; text-align: center;
+}
