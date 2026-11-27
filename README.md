@@ -4,13 +4,13 @@
 [![rank](https://make.fun/badge/best-flight-game-20261126-0057/dewamimpi1st-coder/best-flight-game-20261126-0057/rank.svg)](https://make.fun/bounty/best-flight-game-20261126-0057/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
 [![reward](https://make.fun/badge/best-flight-game-20261126-0057/dewamimpi1st-coder/best-flight-game-20261126-0057/reward.svg)](https://make.fun/bounty/best-flight-game-20261126-0057?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
 
-**Merapi Ring Run** — a complete, original chase-view flight game that plays offline in a desktop browser from static files, with no network requests. Fly a little red-and-yellow prop plane down the Merapi valley at dawn, thread all 12 glowing rings, mind the mountains, and land on the far runway before the 150-second clock runs out.
+**Merapi Dawn Run** — a complete, original chase-view flight game that plays offline in a desktop browser from static files, with no network requests. Fly a little orange prop plane down the Merapi valley at dawn, thread all 14 glowing rings, mind the mountains and the river, and land on the far runway before the 150-second clock runs out.
 
-- Chase view over recognisable terrain: a winding river, patchwork fields, snow-capped ridges, Merapi's cone with a smoke plume, trees rushing past and two runways, all drawn by the game's own canvas code — no images, no downloaded assets.
-- The aircraft stays in frame with lit instruments: a glowing HUD (altitude, speed, heading, compass tape, score, timer) plus an instrument panel with an artificial horizon, airspeed and altitude dials, a heading dial and a throttle gauge.
-- Keyboard and mouse: arrows or WASD to pitch and bank, mouse to steer, Shift to throttle up, Ctrl to throttle down, Space to boost, P to pause, R to restart. Enter or click to fly. Banking right really turns right: a coordinated turn model with a nose that settles back onto the valley track when the wings level.
-- Rings with personality: later rings bob and drift, shrink as the run goes on, and two gold rings are worth 250. Centre a ring for PERFECT +50, chain rings within 8 seconds to build the combo, and the last two rings form the glide path into the runway. A guide marker with a dashed line and the distance always points at the next ring, and a final-approach helper (line-up bar plus TOO HIGH / TOO FAST / ON GLIDE PATH) talks the player down to the runway.
-- Score, combos, ring-pass and landing bonuses, terrain-crash and overshoot logic, a touchdown rollout before the result screen, and start / pause / crash / landing / time-up flows.
+- Chase view over a living valley: a winding river, patchwork fields, drifting clouds, layered mountain ridges, Merapi's cone with a smoking crater, and two runways — all drawn by the game's own canvas code, no images, no downloaded assets.
+- Built to be flyable: gentle auto-levelling, a coordinated turn model where banking right really turns right, automatic takeoff lift, and a next-ring guide with a direction arrow, distance and climb/descend hint, so a first-time player can finish the course.
+- Keyboard and mouse: arrows or WASD to climb, descend and bank, mouse to steer by pointing, Shift to throttle up, Ctrl to throttle down, Space to boost, P to pause, R to restart. Enter or click to fly.
+- Rings with personality: three gold rings worth 250, a PERFECT +50 for threading the centre, and a combo multiplier for chaining rings quickly. A final-approach helper (line-up, height, speed) talks the player down to the runway, and a touchdown rollout leads into a win screen with a full score breakdown.
+- Score, combos, ring-pass and landing bonuses, terrain-crash and overshoot logic, and start / pause / crash / time-up / win flows.
 
 ## Run it
 
