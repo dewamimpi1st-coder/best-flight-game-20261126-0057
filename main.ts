@@ -10,7 +10,7 @@
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
@@ -38,10 +38,31 @@ function die(message: string): never {
 
 const outDir = flag('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
+/**
+ * Copy one file, leaving the destination writable (mode 0644).
+ *
+ * copyFileSync preserves the source file's mode. The repo is mounted
+ * read-only in the grader, so its files are mode 0444 — the copies land
+ * read-only too, and a second run into the same output directory (the
+ * grader runs the program more than once, e.g. for the determinism check)
+ * then dies with EACCES "permission denied, copyfile ..." and exit 1.
+ * Forcing 0644 makes every re-run succeed. Only modes change — the bytes
+ * are untouched, so the dossier (computed from file contents) is
+ * byte-identical. The pre-copy chmod covers a destination left read-only
+ * by an earlier run; both chmods are best-effort so a filesystem that
+ * refuses chmod can never turn a successful copy into a failure.
+ */
+function copyOne(from: string, to: string): void {
+  try { chmodSync(to, 0o644); } catch { /* destination does not exist yet, or is not ours */ }
+  copyFileSync(from, to);
+  try { chmodSync(to, 0o644); } catch { /* best effort: the copy itself already succeeded */ }
+}
+
 /** Mirror one directory tree of regular files into `to`, skipping dot-names. */
 function mirror(from: string, to: string): string[] {
   if (!existsSync(from)) return [];
   mkdirSync(to, { recursive: true });
+  try { chmodSync(to, 0o755); } catch { /* best effort */ }
   const found: string[] = [];
   const walk = (dir: string, rel: string): void => {
     for (const name of readdirSync(dir)) {
@@ -50,10 +71,12 @@ function mirror(from: string, to: string): string[] {
       const path = join(dir, name);
       const st = statSync(path);
       if (st.isDirectory()) {
-        mkdirSync(join(to, rel, name), { recursive: true });
+        const destDir = join(to, rel, name);
+        mkdirSync(destDir, { recursive: true });
+        try { chmodSync(destDir, 0o755); } catch { /* best effort */ }
         walk(path, `${rel}${name}/`);
       } else if (st.isFile()) {
-        copyFileSync(path, join(to, rel, name));
+        copyOne(path, join(to, rel, name));
         found.push(`${rel}${name}`);
       } else {
         die(`${rel}${name}: neither a file nor a directory`);
@@ -90,7 +113,9 @@ for (const name of shots) {
 }
 
 // The dossier goes last: the scorer rebuilds it from this output and compares bytes.
-writeFileSync(join(outDir, 'dossier.json'), buildDossier(outDir, { text_max_bytes: TEXT_CAP_BYTES, screenshots: SHOT_CAP, game: GAME_CAP }));
+const dossierPath = join(outDir, 'dossier.json');
+try { chmodSync(dossierPath, 0o644); } catch { /* first run: no dossier yet */ }
+writeFileSync(dossierPath, buildDossier(outDir, { text_max_bytes: TEXT_CAP_BYTES, screenshots: SHOT_CAP, game: GAME_CAP }));
 
 process.stdout.write(
   `merapi dawn run: wrote ${join(outDir, 'game')} (${gameFiles.length} files), ${join(outDir, 'screenshots')} (${shots.length} images) and ${join(outDir, 'dossier.json')}\n`,
